@@ -1,0 +1,44 @@
+
+In this procedure: __get_syscall_table, we saw some hardcode are used,
+
+while (!((p[0] == 0xff) && (p[1] == 0x14) && (p[2] == 0x85)))
+{
+        p ++;
+}
+
+This can be explained as follows. The varible idt_entry actually refers to the address of int 0x80 handler, namely, the address of system_call. And we can get the dissassembly code of system_call via "objdump -d vmlinux":
+
+c020309c <system_call>:
+c020309c:       50                      push   %eax
+c020309d:       fc                      cld
+c020309e:       6a 00                   push   $0x0
+c02030a0:       0f a0                   push   %fs
+c02030a2:       06                      push   %es
+c02030a3:       1e                      push   %ds
+c02030a4:       50                      push   %eax
+c02030a5:       55                      push   %ebp
+c02030a6:       57                      push   %edi
+c02030a7:       56                      push   %esi
+c02030a8:       52                      push   %edx
+c02030a9:       51                      push   %ecx
+c02030aa:       53                      push   %ebx
+c02030ab:       ba 7b 00 00 00          mov    $0x7b,%edx
+c02030b0:       8e da                   mov    %edx,%ds
+c02030b2:       8e c2                   mov    %edx,%es
+c02030b4:       ba d8 00 00 00          mov    $0xd8,%edx
+c02030b9:       8e e2                   mov    %edx,%fs
+c02030bb:       bd 00 e0 ff ff          mov    $0xffffe000,%ebp
+c02030c0:       21 e5                   and    %esp,%ebp
+c02030c2:       f7 45 08 d1 01 00 08    testl  $0x80001d1,0x8(%ebp)
+c02030c9:       0f 85 ed 00 00 00       jne    c02031bc <syscall_trace_entry>
+c02030cf:       3d 4f 01 00 00          cmp    $0x14f,%eax
+c02030d4:       0f 83 31 01 00 00       jae    c020320b <syscall_badsys>
+
+c02030da <syscall_call>:
+c02030da:       ff 14 85 50 51 57 c0    call   *-0x3fa8aeb0(,%eax,4)
+c02030e1:       89 44 24 18             mov    %eax,0x18(%esp)
+
+Look at "c02030da:", it seems that ff 14 85 refers to the call instruction, and the remaining part of this instruction is the address of something, very likely, it is the address of the system call table. And p actually refers to 0xc02030da.
+
+See this page for more details:
+http://www.win.tue.nl/~aeb/linux/lk/lk-4.html
