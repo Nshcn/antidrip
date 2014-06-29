@@ -16,6 +16,12 @@
 
 #include <linux/version.h>
 
+#ifdef CONFIG_VM86
+#define VM_MASK         0x00020000
+#else
+#define VM_MASK         0 /* ignored */
+#endif
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24)
     #include <asm-i386/debugreg.h>
 #else
@@ -28,7 +34,7 @@
 
 /* define this if you want (very) verbose kern logs */
 
-/*#define __DEBUG__*/
+//#define __DEBUG__
 
 #ifdef __DEBUG__
     #define DEBUGLOG(a) printk a
@@ -81,23 +87,23 @@ static int __get_int_handler(int offset)
 static void __set_int_handler(unsigned int addr, int offset)
 {
                             /* off2 << 16 | off1 */
-    __asm__ __volatile__ (  "xorl %%ebx,%%ebx               \n\t"
-                            "pushl %%ebx                    \n\t"
-                            "pushl %%ebx                    \n\t"
-                            "sidt (%%esp)                   \n\t"
-                            "movl 2(%%esp),%%ebx            \n\t"
-                            "movl %0,%%ecx                  \n\t"
-                            "leal (%%ebx, %%ecx, 8),%%edi   \n\t"
-                            "movl %1,%%eax                  \n\t"
-                            "movw %%ax,(%%edi)              \n\t"
-                            "shrl $0x10,%%eax               \n\t"
-                            "movw %%ax,6(%%edi)             \n\t"
-                            "popl %%ebx                     \n\t"
-                            "popl %%ebx                     \n\t"
-                            "xorl %%eax,%%eax               \n\t"
+    __asm__ __volatile__ (  "xorl %%bx,%%bx               \n\t"
+                            "pushl %%bx                    \n\t"
+                            "pushl %%bx                    \n\t"
+                            "sidt (%%sp)                   \n\t"
+                            "movl 2(%%sp),%%bx            \n\t"
+                            "movl %0,%%cx                  \n\t"
+                            "leal (%%bx, %%cx, 8),%%edi   \n\t"
+                            "movl %1,%%ax                  \n\t"
+                            "movw %%ax,(%%di)              \n\t"
+                            "shrl $0x10,%%ax               \n\t"
+                            "movw %%ax,6(%%di)             \n\t"
+                            "popl %%bx                     \n\t"
+                            "popl %%bx                     \n\t"
+                            "xorl %%ax,%%ax               \n\t"
                             : 
                             : "r" (offset), "r" (addr)
-                            : "ebx", "edi" );
+                            : "bx", "di" );
 
 }
 
@@ -413,7 +419,7 @@ static void __my_do_debug(struct pt_regs * regs,
         case 1:
 
             /* if we dont have a hook for this call do nothing */
-            if (!hook_table[regs->eax])
+            if (!hook_table[regs->ax])
             {
                 __asm__ __volatile__ (  "movl %0,%%dr6  \n\t"
                                         "movl %1,%%dr7  \n\t"
@@ -423,7 +429,7 @@ static void __my_do_debug(struct pt_regs * regs,
             }
 
             /* DR2 2nd watch on the syscall_table entry for this syscall */
-            dr2 = sys_table_global + (unsigned int)regs->eax * sizeof(void *);
+            dr2 = sys_table_global + (unsigned int)regs->ax * sizeof(void *);
             /* enable exact breakpoint detection LE/GE */
             s_control   |= TRAP_GLOBAL_DR2;
             s_control   |= TRAP_LE;
@@ -432,7 +438,7 @@ static void __my_do_debug(struct pt_regs * regs,
             s_control   |= 3          << DR2_LEN;
 
             DEBUGLOG(("*** dr0/dr1 trap: setting read watch on syscall_NR of %d at %X\n", \
-                    (unsigned int)regs->eax, dr2));
+                    (unsigned int)regs->ax, dr2));
 
             /* set dr2 read watch on syscall_table */
             __asm__ __volatile__ (  "movl %0,%%dr2  \n\t"
@@ -446,7 +452,7 @@ static void __my_do_debug(struct pt_regs * regs,
                                     : "r" (status), "r" (s_control)   );
 
             /* if vm86 mode .. pass it on to orig */
-            if (regs->eflags & VM_MASK)
+            if (regs->flags & VM_MASK)
                 goto orig_do_debug;
 
             break;
@@ -474,19 +480,19 @@ static void __my_do_debug(struct pt_regs * regs,
                 eax has our syscall number for both sysenter/int0x80
             */
 
-            if ((regs->eax >= 0 && regs->eax < NR_syscalls) && hook_table[regs->eax])
+            if ((regs->ax >= 0 && regs->ax < NR_syscalls) && hook_table[regs->ax])
             {
                 /* double check .. verify eip matches original */
-                unsigned int verify_hook = (unsigned int)sys_p[regs->eax];
-                if (regs->eip == verify_hook)
+                unsigned int verify_hook = (unsigned int)sys_p[regs->ax];
+                if (regs->ip == verify_hook)
                 {
-                    regs->eip = (unsigned int)hook_table[regs->eax];
-                    DEBUGLOG(("*** hooked __NR_%d at %X to %X\n", regs->eax, verify_hook, \
-                                (unsigned int)hook_table[regs->eax]));
+                    regs->ip = (unsigned int)hook_table[regs->ax];
+                    DEBUGLOG(("*** hooked __NR_%d at %X to %X\n", regs->ax, verify_hook, \
+                                (unsigned int)hook_table[regs->ax]));
                 }
             }
 
-            if (regs->eflags & VM_MASK)
+            if (regs->flags & VM_MASK)
                 goto orig_do_debug;
 
             break;
@@ -516,8 +522,8 @@ static void __my_do_debug(struct pt_regs * regs,
     /* set the resume flag after trap .. clear trap flag */
     if (trap >= 0)
     {
-        regs->eflags |= X86_EFLAGS_RF;
-        regs->eflags &= ~X86_EFLAGS_TF;
+        regs->flags |= X86_EFLAGS_RF;
+        regs->flags &= ~X86_EFLAGS_TF;
     }
 }
 
@@ -530,7 +536,8 @@ static void __exit exit_DR(void)
     DEBUGLOG(("******* UNLOADING IA32 DR HOOKING ENGINE *******\n"));
 
     /* clear any breakpoints on all cpu's */
-    on_each_cpu((void (*)())__set_watch, &watches, 0, 0);
+    __set_watch(&watches);
+//    on_each_cpu((void (*)())__set_watch, &watches, 0);
   
     __get_and_set_do_debug_2_6(h0x01_global, (unsigned int)__orig_do_debug); 
   
@@ -570,7 +577,7 @@ static int __init init_DR(void)
     syscall_call        = __get_syscall_table(h0x80, RETURN_SYSCALL_CALL);
     sys_table_global    = table;
     DEBUGLOG(("*** loader: syscall_table: %X\n", table));
-    DEBUGLOG(("*** loader: syscall_call call *table(,eax,4): %X\n", syscall_call));
+    DEBUGLOG(("*** loader: syscall_call call *table(,ax,4): %X\n", syscall_call));
     
     h0x01 = __get_int_handler(0x1);
     DEBUGLOG(("*** loader: handler for INT 1: %X\n", h0x01));
@@ -602,7 +609,7 @@ static int __init init_DR(void)
 
     /* we can find the 2nd addie by searching backwards for call *table(,%eax,4) ! :) */
     sysenter_entry = __get_sysenter_entry(syscall_call, table);
-    DEBUGLOG(("*** loader: systenter_entry call *table(,eax,4): %X\n", sysenter_entry));
+    DEBUGLOG(("*** loader: systenter_entry call *table(,ax,4): %X\n", sysenter_entry));
 
     /* if we were able to find the sysentry_entry syscall_table call .. hooray */
     if (sysenter_entry)
@@ -617,7 +624,8 @@ static int __init init_DR(void)
 #endif
 
     /* support smp */
-    on_each_cpu((void (*)())__set_watch, &watches, 0, 0);
+//    on_each_cpu((void (*)())__set_watch, &watches, 0);
+	__set_watch(&watches);
 
 #ifdef __UNLINK_LKM__
 
